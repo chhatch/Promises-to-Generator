@@ -1,55 +1,37 @@
-const { v4: uuidv4 } = require("uuid");
 const { unpackedPromise } = require("./utils");
 
-const promisesToHash = (promises) =>
-  promises.reduce((hash, p) => {
-    const id = uuidv4();
-    hash[id] = p.then((result) => [id, result]);
-    return hash;
-  }, {});
-
 const buildAsyncIterator = (promises = [], timeout = 3000) => {
-  const hash = promisesToHash(promises);
+  const results = [];
   let [pause, resume] = unpackedPromise();
-
-  const updateHash = async () => {
-    const [id, result] = await Promise.race(Object.values(hash));
-    delete hash[id];
-    return result;
-  };
 
   const breakSymbol = Symbol("break");
 
+  const addPromise = (p) => {
+    p.then((result) => {
+      resume();
+      results.push(result);
+    });
+  };
+
+  promises.forEach(addPromise);
+
   const generator = async function* () {
     while (true) {
-      if (Object.keys(hash).length === 0) {
-        console.log("waiting...");
-
-        let timoutId;
+      if (results.length === 0) {
         const timeoutPromise = new Promise((resolve) => {
-          timoutId = setTimeout(() => resolve(breakSymbol), timeout);
+          setTimeout(() => resolve(breakSymbol), timeout);
         });
 
-        const result = await Promise.race([pause, timeoutPromise]);
+        const shouldBreak = await Promise.race([pause, timeoutPromise]);
 
-        if (result === breakSymbol) {
-          console.log("timeout");
+        if (shouldBreak === breakSymbol) {
           break;
         }
         [pause, resume] = unpackedPromise();
       }
 
-      yield updateHash();
+      yield results.shift();
     }
-  };
-
-  const addPromise = (p) => {
-    const id = uuidv4();
-    hash[id] = p.then((result) => {
-      resume();
-      return [id, result];
-    });
-    console.log("new promise added!");
   };
 
   return [generator(), addPromise];
